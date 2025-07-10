@@ -1,4 +1,6 @@
 version: "3.7"
+# This docker-compose file provides a local MinIO service for development and testing
+# For production, it's recommended to use Wasabi S3 or another S3-compatible service
 services:
   minio:
     image: minio/minio:latest

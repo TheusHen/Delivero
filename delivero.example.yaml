@@ -3,24 +3,32 @@
 name: Example Project
 
 repo: https://github.com/your-user/your-repo.git
-repo_dir: app # Path to your project folder inside the repo, or "." if root
+repo_dir: app # Path to your project folder, or "." if it's in the root
+
+dependencies:
+  linux:
+    - sudo apt update
+    - sudo apt install -y curl git unzip xz-utils zip libglu1-mesa
+    - curl -O https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.22.1-stable.tar.xz
+    - tar xf flutter_linux_3.22.1-stable.tar.xz
+    - export PATH="$PATH:$(pwd)/flutter/bin" # Example; replace for your project
 
 build:
   - echo "Starting build process"
-  - make build
+  - flutter build apk # Example; replace with your project's command
 
 test:
   - echo "Running tests"
   - make test
 
 artifacts:
-  - path: dist/app.apk
+  - path: build/app/outputs/flutter-apk/app-release.apk
     name: app.apk
   - path: reports/coverage.html
     name: coverage.html
 
 storage:
-  provider: minio
+  provider: s3
   bucket: my-artifacts
 
 notify:

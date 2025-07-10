@@ -51,6 +51,18 @@ jobs:
           fi
           echo "$NEW_COMMIT" > $LAST_COMMIT_FILE
 
+      - name: Run dependencies (Linux)
+        run: |
+          set -e
+          if [ "$(yq '.dependencies.linux' $DELIVERO_YAML)" != "null" ]; then
+            echo "Installing Linux dependencies..."
+            for cmd in $(yq -r '.dependencies.linux[]' $DELIVERO_YAML); do
+              echo "::group::Dependency: $cmd"
+              eval "$cmd"
+              echo "::endgroup::"
+            done
+          fi
+
       - name: Build stage
         run: |
           cd repo_src/${{ env.repo_dir }}
