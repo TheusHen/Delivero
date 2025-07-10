@@ -1,0 +1,30 @@
+# delivero.example.yaml - Example configuration for Delivero Universal CI/CD
+
+name: Example Project
+
+repo: https://github.com/your-user/your-repo.git
+repo_dir: app # Path to your project folder inside the repo, or "." if root
+
+build:
+  - echo "Starting build process"
+  - make build
+
+test:
+  - echo "Running tests"
+  - make test
+
+artifacts:
+  - path: dist/app.apk
+    name: app.apk
+  - path: reports/coverage.html
+    name: coverage.html
+
+storage:
+  provider: minio
+  bucket: my-artifacts
+
+notify:
+  channels:
+    - type: whatsapp
+      phone: "+15555555555"
+      provider: callmebot

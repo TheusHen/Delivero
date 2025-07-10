@@ -1,0 +1,126 @@
+name: Delivero Universal CI/CD
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  delivero:
+    runs-on: ubuntu-latest
+
+    env:
+      DELIVERO_YAML: delivero.example.yaml
+
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+
+      - name: Install required dependencies (yq, jq, mc, git)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl git
+          wget https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64 -O /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          wget https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x mc
+          sudo mv mc /usr/local/bin/mc
+
+      - name: Parse delivero.yaml and clone target project
+        id: parse
+        run: |
+          REPO=$(yq -r '.repo' $DELIVERO_YAML)
+          DIR=$(yq -r '.repo_dir // "."' $DELIVERO_YAML)
+          echo "Cloning $REPO"
+          git clone "$REPO" repo_src
+          cd repo_src
+          git log -1 --format='%H' > ../last_commit.txt
+          cd ..
+          echo "repo_dir=$DIR" >> $GITHUB_ENV
+
+      - name: Check for new commits since last build
+        id: check_new_commit
+        run: |
+          LAST_COMMIT_FILE=.last_commit_build
+          NEW_COMMIT=$(cat last_commit.txt)
+          OLD_COMMIT=$(cat $LAST_COMMIT_FILE 2>/dev/null || echo "none")
+          echo "Last built commit: $OLD_COMMIT | Current: $NEW_COMMIT"
+          if [ "$NEW_COMMIT" = "$OLD_COMMIT" ]; then
+            echo "No new commits since last build. Skipping job."
+            exit 78
+          fi
+          echo "$NEW_COMMIT" > $LAST_COMMIT_FILE
+
+      - name: Build stage
+        run: |
+          cd repo_src/${{ env.repo_dir }}
+          for cmd in $(yq -r '.build[]' ../../../$DELIVERO_YAML); do
+            echo "::group::Build: $cmd"
+            eval "$cmd"
+            echo "::endgroup::"
+          done
+
+      - name: Test stage
+        run: |
+          cd repo_src/${{ env.repo_dir }}
+          for cmd in $(yq -r '.test[]' ../../../$DELIVERO_YAML); do
+            echo "::group::Test: $cmd"
+            eval "$cmd"
+            echo "::endgroup::"
+          done
+
+      - name: Configure MinIO (mc alias)
+        env:
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+        run: |
+          mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+
+      - name: Upload artifacts to MinIO
+        env:
+          MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
+        run: |
+          cd repo_src/${{ env.repo_dir }}
+          artifact_count=$(yq '.artifacts | length' ../../../$DELIVERO_YAML)
+          for i in $(seq 0 $((artifact_count - 1))); do
+            SRC=$(yq -r ".artifacts[$i].path" ../../../$DELIVERO_YAML)
+            DST=$(yq -r ".artifacts[$i].name" ../../../$DELIVERO_YAML)
+            if [[ -f "$SRC" ]]; then
+              echo "Uploading $SRC as $DST"
+              mc cp "$SRC" "myminio/$MINIO_BUCKET/$DST"
+            else
+              echo "ERROR: Artifact $SRC not found!" >&2
+              exit 1
+            fi
+          done
+
+      - name: Generate pre-signed artifact links
+        id: links
+        env:
+          MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
+        run: |
+          LINKS=""
+          artifact_count=$(yq '.artifacts | length' ../../../$DELIVERO_YAML)
+          for i in $(seq 0 $((artifact_count - 1))); do
+            DST=$(yq -r ".artifacts[$i].name" ../../../$DELIVERO_YAML)
+            LINK=$(mc presign get --expiry 7200 "myminio/$MINIO_BUCKET/$DST")
+            LINKS="${LINKS}\n$DST: $LINK"
+          done
+          echo -e "$LINKS" > links.txt
+          echo "LINKS<<EOF" >> $GITHUB_ENV
+          cat links.txt >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Notify WhatsApp via CallMeBot
+        if: ${{ always() }}
+        env:
+          CALLMEBOT_APIKEY: ${{ secrets.CALLMEBOT_APIKEY }}
+        run: |
+          PHONE=$(yq -r '.notify.channels[] | select(.type == "whatsapp") | .phone' ../../../$DELIVERO_YAML)
+          if [[ -n "$PHONE" && -n "$CALLMEBOT_APIKEY" ]]; then
+            MSG="Build completed! Artifact links:\n$(cat links.txt)"
+            curl --fail "https://api.callmebot.com/whatsapp.php?phone=${PHONE}&text=$(echo $MSG | jq -sRr @uri)&apikey=$CALLMEBOT_APIKEY"
+          else
+            echo "WhatsApp notification skipped (phone or API key missing)"
+          fi
